@@ -28,6 +28,7 @@ list(APPEND SOURCES
     "${PROJECT_SOURCE_DIR}/src/main.c"
     "${PROJECT_SOURCE_DIR}/src/ic_version.c"
     "${PROJECT_SOURCE_DIR}/src/ic_bt.c"
+    "${PROJECT_SOURCE_DIR}/src/ic_leds.c"
     )
 
 include_directories(${HEADERS})

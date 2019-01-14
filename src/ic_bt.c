@@ -103,15 +103,6 @@ void generic_onoff_status(struct bt_mesh_model *model, struct bt_mesh_msg_ctx *c
            bt_mesh_model_elem(model)->addr, ctx->addr, state);
 }
 
-// u16_t map_pulse(s16_t x, s16_t in_min, s16_t in_max, u16_t out_min, u16_t out_max)
-// {
-//     return (u16_t)((x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min);
-// }
-
-// s16_t map_level(u16_t x, u16_t in_min, u16_t in_max, s16_t out_min, s16_t out_max)
-// {
-//     return (s16_t)((x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min);
-// }
 
 void generic_level_get(struct bt_mesh_model *model, struct bt_mesh_msg_ctx *ctx,
                        struct net_buf_simple *buf)
