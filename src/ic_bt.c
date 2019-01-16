@@ -50,7 +50,7 @@ void generic_onoff_get(struct bt_mesh_model *model, struct bt_mesh_msg_ctx *ctx,
     // 4 additional bytes for the TransMIC
 
 
-    printk("Sending onoff status msg to 0x%04x, value -> %d\n", pub_cli->addr, *cur_elem->state);
+    printk("Sending onoff status msg to 0x%04x, value -> %d\n", pub_cli->addr, !*cur_elem->state);
     bt_mesh_model_msg_init(pub_cli->msg, BT_MESH_MODEL_OP_GENERIC_ONOFF_STATUS);
     net_buf_simple_add_u8(pub_cli->msg, *cur_elem->state);
     int err = bt_mesh_model_publish(model);
@@ -88,19 +88,19 @@ void generic_onoff_set_unack(struct bt_mesh_model *model, struct bt_mesh_msg_ctx
 
     elem->set_state(new_onoff_state);
     printk("[0x%04x]: Value msg -> %d/ TID -> %d\n", bt_mesh_model_elem(model)->addr,
-           new_onoff_state, tid);
+           !new_onoff_state, tid);
 }
 
 
 void generic_onoff_status(struct bt_mesh_model *model, struct bt_mesh_msg_ctx *ctx,
                           struct net_buf_simple *buf)
 {
-    u8_t state               = net_buf_simple_pull_u8(buf);
-    struct onoff_cli *bt_cli = model->user_data;
-    bt_cli->state            = state;
+    u8_t state            = net_buf_simple_pull_u8(buf);
+    struct onoff_cli *cli = model->user_data;
+    cli->state            = state;
 
     printk("Node 0x%04x OnOff status from 0x%04x with state 0x%02x\n",
-           bt_mesh_model_elem(model)->addr, ctx->addr, state);
+           bt_mesh_model_elem(model)->addr, ctx->addr, !state);
 }
 
 
@@ -189,15 +189,15 @@ void send_generic_onoff_get(struct onoff_cli *bt_cli, u16_t message_type)
     }
 }
 
-void send_generic_onoff_set(struct onoff_cli *bt_cli, u16_t message_type)
+void send_generic_onoff_set(struct onoff_cli *cli, u16_t message_type)
 {
     struct bt_mesh_model_pub *pub_cli;
-    pub_cli = bt_cli->model_cli->pub;
-    printk("Sending onoff set msg to 0x%04x, value -> %d\n", pub_cli->addr, bt_cli->state);
+    pub_cli = cli->model_cli->pub;
+    printk("Sending onoff set msg to 0x%04x, value -> %d\n", pub_cli->addr, !cli->act);
     bt_mesh_model_msg_init(pub_cli->msg, message_type);
-    net_buf_simple_add_u8(pub_cli->msg, bt_cli->state);
-    net_buf_simple_add_u8(pub_cli->msg, bt_cli->tid++);
-    int err = bt_mesh_model_publish(bt_cli->model_cli);
+    net_buf_simple_add_u8(pub_cli->msg, cli->act);
+    net_buf_simple_add_u8(pub_cli->msg, cli->tid++);
+    int err = bt_mesh_model_publish(cli->model_cli);
     if (err) {
         printk("bt_mesh_model_publish err %d, sending msg to 0x%04x\n", err, pub_cli->addr);
     }

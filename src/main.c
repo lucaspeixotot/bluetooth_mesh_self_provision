@@ -1,74 +1,77 @@
+/**
+ * @file ic_bt.h
+ * @Lucas Peixoto (lpdac@ic.ufal.br)
+ * @brief
+ * @version 0.1
+ * @date 2018-12-25
+ *
+ * @copyright Copyright (c) 2018
+ *
+ */
+#include <misc/printk.h>
+#include <zephyr.h>
+
 #include "ic_bt.h"
+#include "ic_buttons.h"
 #include "ic_leds.h"
 #include "ic_version.h"
 
 #define SLEEP_TIME 250
+#define PRIORITY 7
+#define STACKSIZE 1024
 
-// Initializing variables
-void set_state(u8_t state);
-ic_leds_device_t leds_device = {0};
-u8_t leds_states[4]          = {0};
+// LED STUFF ------------------------------------------------------------------
+u8_t leds_states[4]       = {0};
+ic_leds_device_t leds_dev = {0};
 
-static struct onoff_srv led_onoff_elems[] = {
-    {
-        .state     = &leds_states[0],
-        .set_state = set_state,
-        .tid       = 0,
+// BUTTON STUFF ---------------------------------------------------------------
+struct k_work pressed_work[BUTTON_NUMBERS];
+ic_buttons_device_t buttons_dev;
+u32_t time      = 0;
+u32_t last_time = 0;
 
-    },
-};
+// BLE STUFF ------------------------------------------------------------------
 
-// security keys
+// Addresses
 
-// 0123456789abcdef0123456789abcdef
-static const u8_t dev_key[16] = {
-    0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
-};
+#define ROOT_ADDR 0x00e1
+#define LED_ADDR 0x00e2
+#define BUTTON_ADDR 0x00e3
 
-// 0123456789abcdef0123456789abcdef
+#define GROUP_ADDR 0xcea0
+#define GROUP_PUB_ADDR 0xcae0
+
+static const uint8_t dev_uuid[16] = {0xcf, 0xa0, 0xea, 0x7e, 0x17, 0xd9, 0x11, 0xe8,
+                                     0x86, 0xd1, 0x5f, 0x1c, 0xe2, 0x8a, 0xde, 0xa7};
+
+// Security keys
 static const u8_t net_key[16] = {
     0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
 };
-
-// 0123456789abcdef0123456789abcdef
+static const u8_t dev_key[16] = {
+    0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+};
 static const u8_t app_key[16] = {
     0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
 };
 
-
-// 4.3.1.1 Key indices
+// Variables for configuration and self provisioning
 static const u16_t net_idx;
 static const u16_t app_idx;
-// 3.8.4 IV Index
 static const u32_t iv_index;
-
-// other
-
 static u8_t flags;
-static u8_t tid;
 
-// Addresses
+// Node construction
+// 2 bytes for opcode
+// 1 byte for msg
+// 1 byte for delay e etc
+BT_MESH_MODEL_PUB_DEFINE(pub_onoff_srv, NULL, 2 + 2);
+BT_MESH_MODEL_PUB_DEFINE(pub_onoff_cli, NULL, 2 + 2);
 
-#define NODE_ADDR 0x0007
-#define GROUP_ADDR 0xc000
+// Health server model
+BT_MESH_HEALTH_PUB_DEFINE(health_pub, 0);
 
-static u16_t addr = NODE_ADDR;
-
-// device UUID
-// cfa0ea7e-17d9-11e8-86d1-5f1ce28adea1
-static const uint8_t dev_uuid[16] = {0xcf, 0xa0, 0xea, 0x7e, 0x17, 0xd9, 0x11, 0xe8,
-                                     0x86, 0xd1, 0x5f, 0x1c, 0xe2, 0x8a, 0xde, 0xa1};
-
-
-// Defining the msg publishers
-
-// 2 Bytes for opcode
-// 1 Bytes for msg content
-// 1 Byte for delay and transient
-BT_MESH_MODEL_PUB_DEFINE(pub_onoff_srv, NULL, 2 + 1 + 1);
-
-
-// Defining server config
+// Defining config server
 static struct bt_mesh_cfg_srv cfg_srv = {
     .relay            = BT_MESH_RELAY_DISABLED,
     .beacon           = BT_MESH_BEACON_ENABLED,
@@ -79,22 +82,52 @@ static struct bt_mesh_cfg_srv cfg_srv = {
     .relay_retransmit = BT_MESH_TRANSMIT(2, 20),
 };
 
-// Health server model
-BT_MESH_HEALTH_PUB_DEFINE(health_pub, 0);
 
 static struct bt_mesh_health_srv health_srv = {};
 static struct bt_mesh_cfg_cli cfg_cli       = {};
+static void set_state(u8_t state)
+{
+    if (!state) {
+        ic_leds_turn_on_led(&leds_dev, LED0);
+    } else {
+        ic_leds_turn_off_led(&leds_dev, LED0);
+    }
+}
+
+static struct onoff_srv led_onoff_elems[] = {
+    {
+        .state     = &leds_states[0],
+        .tid       = 0,
+        .set_state = set_state,
+    },
+};
+
+static struct onoff_cli cli_onoff_elems[] = {
+    {
+        .state = 0,
+        .tid   = 0,
+    },
+};
 
 static struct bt_mesh_model root_models[] = {
     BT_MESH_MODEL_CFG_SRV(&cfg_srv),
     BT_MESH_MODEL_CFG_CLI(&cfg_cli),
     BT_MESH_MODEL_HEALTH_SRV(&health_srv, &health_pub),
+};
+
+static struct bt_mesh_model led_models[] = {
     BT_MESH_MODEL(BT_MESH_MODEL_ID_GEN_ONOFF_SRV, generic_onoff_srv_op, &pub_onoff_srv,
                   &led_onoff_elems[0]),
 };
 
+static struct bt_mesh_model button_models[] = {
+    BT_MESH_MODEL(BT_MESH_MODEL_ID_GEN_ONOFF_CLI, generic_onoff_cli_op, &pub_onoff_cli,
+                  &cli_onoff_elems[0]),
+};
 struct bt_mesh_elem elements[] = {
     BT_MESH_ELEM(0, root_models, BT_MESH_MODEL_NONE),
+    BT_MESH_ELEM(0, led_models, BT_MESH_MODEL_NONE),
+    BT_MESH_ELEM(0, button_models, BT_MESH_MODEL_NONE),
 };
 
 static const struct bt_mesh_comp comp = {
@@ -103,38 +136,85 @@ static const struct bt_mesh_comp comp = {
     .elem_count = ARRAY_SIZE(elements),
 };
 
-static int output_number(bt_mesh_output_action_t action, u32_t number);
-static void prov_complete(u16_t net_idx, u16_t addr);
-static void prov_reset(void);
-
 static const struct bt_mesh_prov prov = {
-    .uuid           = dev_uuid,
-    .output_size    = 1,
-    .output_actions = BT_MESH_DISPLAY_NUMBER,
-    .output_number  = output_number,
-    .complete       = prov_complete,
-    .reset          = prov_reset,
+    .uuid = dev_uuid,
 };
 
-void set_state(u8_t state)
+
+// BOARD STUFF ----------------------------------------------------------------
+
+void button1_handler(struct k_work *work)
 {
-    if (state) {
-        ic_leds_turn_on_led(&leds_device, LED0);
-    } else {
-        ic_leds_turn_off_led(&leds_device, LED0);
+    printk("Button 1 handler started.\n");
+    struct onoff_cli *h = CONTAINER_OF(work, struct onoff_cli, callback_work);
+    h->act              = !h->state;
+    send_generic_onoff_set(h, BT_MESH_MODEL_OP_GENERIC_ONOFF_SET);
+}
+
+void ic_buttons_callback(struct device *buttons_device, struct gpio_callback *callback,
+                         u32_t button_pin_mask)
+{
+    time = k_uptime_get_32();
+
+    if (time < last_time + BUTTON_DEBOUNCE_DELAY_MS) {
+        last_time = time;
+        return;
     }
+
+    if (ic_buttons_pin_to_i(button_pin_mask) == 0) {
+        printk("Button 1 was pressed.\n");
+        k_work_submit(&cli_onoff_elems[0].callback_work);
+    } else if (ic_buttons_pin_to_i(button_pin_mask) == 1) {
+        printk("The button 2 was not configured.\n");
+    } else if (ic_buttons_pin_to_i(button_pin_mask) == 2) {
+        printk("The button 3 was not configured.\n");
+    } else if (ic_buttons_pin_to_i(button_pin_mask) == 3) {
+        printk("The button 4 was not configured.\n");
+    }
+    last_time = time;
+}
+
+static int configure_board()
+{
+    int err;
+
+    // Led configuration
+    err = ic_leds_init_device(&leds_dev);
+    if (err) {
+        printk("Error initializing leds device\n");
+        return err;
+    }
+
+    err = ic_leds_configure(&leds_dev);
+    if (err) {
+        printk("Error configuring leds device\n");
+        return err;
+    }
+
+    ic_leds_turn_off_led(&leds_dev, LED1);
+    ic_leds_turn_off_led(&leds_dev, LED2);
+    ic_leds_turn_off_led(&leds_dev, LED3);
+
+    // Button configuration
+    ic_buttons_init_device(&buttons_dev);
+    ic_buttons_configure(&buttons_dev);
+    ic_buttons_configure_callback(&buttons_dev, ic_buttons_callback);
+    cli_onoff_elems[0].callback_work = pressed_work[0];
+    cli_onoff_elems[0].model_cli     = &button_models[0];
+    k_work_init(&cli_onoff_elems[0].callback_work, button1_handler);
+
+    return 0;
 }
 
 static int self_provision()
 {
     // now we provision ourselves... this is not how it would normally be done!
-    int err = bt_mesh_provision(net_key, net_idx, flags, iv_index, addr, dev_key);
+    int err = bt_mesh_provision(net_key, net_idx, flags, iv_index, ROOT_ADDR, dev_key);
     if (err) {
         printk("Provisioning failed (err %d)\n", err);
         return err;
     }
     printk("Provisioning completed\n");
-
     return 0;
 }
 
@@ -143,8 +223,8 @@ static int self_configure()
     int err;
     printk("configuring...\n");
 
-    /* Add Application Key */
-    err = bt_mesh_cfg_app_key_add(net_idx, addr, net_idx, app_idx, app_key, NULL);
+    /* Add Application Key to root models*/
+    err = bt_mesh_cfg_app_key_add(net_idx, ROOT_ADDR, net_idx, app_idx, app_key, NULL);
     if (err) {
         printk("ERROR adding appkey (err %d)\n", err);
         return err;
@@ -153,8 +233,8 @@ static int self_configure()
     }
 
     /* Bind to generic onoff server model */
-    err = bt_mesh_cfg_mod_app_bind(net_idx, addr, addr, app_idx, BT_MESH_MODEL_ID_GEN_ONOFF_SRV,
-                                   NULL);
+    err = bt_mesh_cfg_mod_app_bind(net_idx, ROOT_ADDR, LED_ADDR, app_idx,
+                                   BT_MESH_MODEL_ID_GEN_ONOFF_SRV, NULL);
     if (err) {
         printk("ERROR binding to generic onoff server model (err %d)\n", err);
         return err;
@@ -163,7 +243,8 @@ static int self_configure()
     }
 
     /* Bind to Health model */
-    err = bt_mesh_cfg_mod_app_bind(net_idx, addr, addr, app_idx, BT_MESH_MODEL_ID_HEALTH_SRV, NULL);
+    err = bt_mesh_cfg_mod_app_bind(net_idx, ROOT_ADDR, ROOT_ADDR, app_idx,
+                                   BT_MESH_MODEL_ID_HEALTH_SRV, NULL);
     if (err) {
         printk("ERROR binding to health server model (err %d)\n", err);
         return err;
@@ -171,8 +252,8 @@ static int self_configure()
         printk("bound appkey to health server model\n");
     }
 
-    // subscribe to the group address
-    err = bt_mesh_cfg_mod_sub_add(net_idx, NODE_ADDR, NODE_ADDR, GROUP_ADDR,
+    // subscribe srv model to the group address
+    err = bt_mesh_cfg_mod_sub_add(net_idx, ROOT_ADDR, LED_ADDR, GROUP_ADDR,
                                   BT_MESH_MODEL_ID_GEN_ONOFF_SRV, NULL);
     if (err) {
         printk("ERROR subscribing to group address (err %d)\n", err);
@@ -181,10 +262,34 @@ static int self_configure()
         printk("subscribed to group address\n");
     }
 
+    /* Bind to generic onoff client model */
+    err = bt_mesh_cfg_mod_app_bind(net_idx, ROOT_ADDR, BUTTON_ADDR, app_idx,
+                                   BT_MESH_MODEL_ID_GEN_ONOFF_CLI, NULL);
+    if (err) {
+        printk("ERROR binding to generic onoff client model (err %d)\n", err);
+        return err;
+    } else {
+        printk("bound appkey to generic onoff server model\n");
+    }
+
+    // subscribe cli model to the group address
+    err = bt_mesh_cfg_mod_sub_add(net_idx, ROOT_ADDR, BUTTON_ADDR, GROUP_PUB_ADDR,
+                                  BT_MESH_MODEL_ID_GEN_ONOFF_CLI, NULL);
+    if (err) {
+        printk("ERROR subscribing to group address (err %d)\n", err);
+        return err;
+    } else {
+        printk("subscribed to group address\n");
+    }
+
+    // publish cli and srv model to its respective groups addresses
+    pub_onoff_cli.addr = GROUP_ADDR;
+    pub_onoff_srv.addr = GROUP_PUB_ADDR;
+
     return 0;
 }
 
-// Bluetooth mesh initialization
+
 static void bt_ready(int err)
 {
     if (err) {
@@ -215,40 +320,6 @@ static void bt_ready(int err)
     } else {
         printk("Mesh initialised OK\n");
     }
-
-    /*if (IS_ENABLED(CONFIG_SETTINGS)) {*/
-    /*settings_load();*/
-    /*}*/
-
-    /* This will be a no-op if settings_load() loaded provisioning info */
-    /*bt_mesh_prov_enable(BT_MESH_PROV_ADV | BT_MESH_PROV_GATT);*/
-    printk("Mesh initialized.\n");
-}
-
-
-// GATT PROVISIONING CALLBACK
-static int output_number(bt_mesh_output_action_t action, u32_t number)
-{
-    printk("OOB Number: %u\n", number);
-    return 0;
-}
-
-
-static void prov_complete(u16_t net_idx, u16_t addr)
-{
-    printk("Provisioning was completed.\n");
-}
-
-static void prov_reset(void)
-{
-    bt_mesh_prov_enable(BT_MESH_PROV_ADV | BT_MESH_PROV_GATT);
-}
-
-int configure_board()
-{
-    ic_leds_init_device(&leds_device);
-    ic_leds_configure(&leds_device);
-    return 0;
 }
 
 void main(void)
@@ -267,6 +338,7 @@ void main(void)
         printk("bt_enable failed with err %d\n", err);
         return;
     }
+
     while (1) {
         k_sleep(SLEEP_TIME);
     }

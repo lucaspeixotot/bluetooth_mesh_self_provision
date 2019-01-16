@@ -58,6 +58,7 @@ struct onoff_cli {
     struct bt_mesh_model *model_cli;
     struct k_work callback_work;
     u8_t state;
+    u8_t act;
     u8_t tid;
 };
 

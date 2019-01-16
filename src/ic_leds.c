@@ -28,7 +28,6 @@ int ic_leds_configure(ic_leds_device_t *leds_device)
     if (leds_device->initiated != 1) {
         return -ENODEV;
     }
-
     gpio_pin_configure(leds_device->ic_device, LED0,
                        GPIO_DIR_OUT | GPIO_PUD_PULL_UP | GPIO_INT_ACTIVE_HIGH);
 
